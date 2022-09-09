@@ -8,22 +8,22 @@ using JetBrains.Annotations;
 using McMaster.Extensions.CommandLineUtils;
 using osu.Server.Queues.ScoreStatisticsProcessor.Models;
 
-namespace osu.Server.Queues.ScorePump
+namespace osu.Server.Queues.ScorePump.Queue
 {
     /// <summary>
     /// Keep in mind that this command is intended to be a temporary stand-in until osu-web
     /// pushes to the score processing queue directly.
     /// </summary>
     [Command("watch", Description = "Watch for new scores and queue as they arrive.")]
-    public class WatchNewScores : ScorePump
+    public class WatchNewScores : QueueCommand
     {
         [Option("--start_id")]
-        public long? StartId { get; set; }
+        public ulong? StartId { get; set; }
 
         private const int count_per_run = 100;
 
         [UsedImplicitly]
-        private long lastId;
+        private ulong lastId;
 
         public int OnExecute(CancellationToken cancellationToken)
         {
@@ -32,7 +32,7 @@ namespace osu.Server.Queues.ScorePump
             else
             {
                 using (var db = Queue.GetDatabaseConnection())
-                    lastId = db.QuerySingle<long>("SELECT MAX(id) FROM solo_scores_process_history");
+                    lastId = db.QuerySingleOrDefault<ulong?>($"SELECT MAX($score_id) FROM {ProcessHistory.TABLE_NAME}") ?? 0;
             }
 
             while (true)
@@ -42,7 +42,7 @@ namespace osu.Server.Queues.ScorePump
 
                 using (var db = Queue.GetDatabaseConnection())
                 {
-                    var scores = db.Query<SoloScore>("SELECT * FROM solo_scores WHERE id > @lastId LIMIT @count_per_run", new
+                    var scores = db.Query<SoloScore>($"SELECT * FROM {SoloScore.TABLE_NAME} WHERE id > @lastId LIMIT @count_per_run", new
                     {
                         lastId,
                         count_per_run
@@ -63,7 +63,7 @@ namespace osu.Server.Queues.ScorePump
 
                         // attach any previous processing information
                         // this should never be the case, and should probably be removed eventually.
-                        var history = db.QuerySingleOrDefault<ProcessHistory>("SELECT * FROM solo_scores_process_history WHERE id = @id", new { score.id });
+                        var history = db.QuerySingleOrDefault<ProcessHistory>($"SELECT * FROM {ProcessHistory.TABLE_NAME} WHERE score_id = @id", new { score.id });
 
                         Console.WriteLine($"Pumping {score}");
                         Queue.PushToQueue(new ScoreItem(score, history));

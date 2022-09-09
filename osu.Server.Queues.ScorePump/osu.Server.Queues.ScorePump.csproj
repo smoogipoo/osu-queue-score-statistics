@@ -2,16 +2,16 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net5.0</TargetFramework>
+        <TargetFramework>net6.0</TargetFramework>
         <Nullable>enable</Nullable>
         <RootNamespace>osu.Server.Queues.ScorePump</RootNamespace>
         <AssemblyName>osu.Server.Queues.ScorePump</AssemblyName>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Dapper" Version="2.0.90" />
-        <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="3.1.0" />
-        <PackageReference Include="ppy.osu.Server.OsuQueueProcessor" Version="2021.615.0" />
+        <PackageReference Include="Dapper" Version="2.0.123" />
+        <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="4.0.1" />
+        <PackageReference Include="ppy.osu.Server.OsuQueueProcessor" Version="2022.812.0" />
     </ItemGroup>
 
     <ItemGroup>

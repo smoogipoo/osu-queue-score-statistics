@@ -3,10 +3,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using Dapper;
 using Dapper.Contrib.Extensions;
 using MySqlConnector;
+using osu.Game.Rulesets;
 using osu.Server.QueueProcessor;
 using osu.Server.Queues.ScoreStatisticsProcessor.Models;
 
@@ -18,17 +21,21 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor
         /// version 1: basic playcount
         /// version 2: total score, hit statistics, beatmap playcount, monthly playcount, max combo
         /// version 3: fixed incorrect revert condition for beatmap/monthly playcount
+        /// version 4: uses SoloScore"V2" (moving all content to json data block)
+        /// version 5: added performance processor
+        /// version 6: added play time processor
         /// </summary>
-        public const int VERSION = 3;
+        public const int VERSION = 6;
+
+        public static readonly List<Ruleset> AVAILABLE_RULESETS = getRulesets();
 
         private readonly List<IProcessor> processors = new List<IProcessor>();
+
+        private readonly ElasticQueueProcessor elasticQueueProcessor = new ElasticQueueProcessor();
 
         public ScoreStatisticsProcessor()
             : base(new QueueConfiguration { InputQueueName = "score-statistics" })
         {
-            SqlMapper.AddTypeHandler(new StatisticsTypeHandler());
-            SqlMapper.AddTypeHandler(new ModsTypeHandler());
-
             DapperExtensions.InstallDateTimeOffsetMapper();
 
             // add each processor automagically.
@@ -37,19 +44,28 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor
                 if (Activator.CreateInstance(t) is IProcessor processor)
                     processors.Add(processor);
             }
+
+            processors = processors.OrderBy(p => p.Order).ToList();
         }
 
         protected override void ProcessResult(ScoreItem item)
         {
+            if (item.ProcessHistory?.processed_version == VERSION)
+            {
+                item.Tags = new[] { "type:skipped" };
+                return;
+            }
+
             try
             {
                 using (var conn = GetDatabaseConnection())
                 {
-                    var score = item.Score;
+                    var scoreRow = item.Score;
+                    var score = scoreRow.ScoreInfo;
 
                     using (var transaction = conn.BeginTransaction())
                     {
-                        var userStats = GetUserStats(score, conn, transaction);
+                        var userStats = DatabaseHelper.GetUserStatsAsync(score, conn, transaction).Result;
 
                         if (userStats == null)
                             // ruleset could be invalid
@@ -59,17 +75,29 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor
                         // if required, we can rollback any previous version of processing then reapply with the latest.
                         if (item.ProcessHistory != null)
                         {
+                            item.Tags = new[] { "type:upgraded" };
                             byte version = item.ProcessHistory.processed_version;
 
                             foreach (var p in processors)
                                 p.RevertFromUserStats(score, userStats, version, conn, transaction);
                         }
+                        else
+                        {
+                            item.Tags = new[] { "type:new" };
+                        }
 
                         foreach (var p in processors)
                             p.ApplyToUserStats(score, userStats, conn, transaction);
 
-                        updateUserStats(userStats, conn, transaction);
+                        DatabaseHelper.UpdateUserStatsAsync(userStats, conn, transaction).Wait();
+
                         updateHistoryEntry(item, conn, transaction);
+
+                        if (score.Passed)
+                        {
+                            // For now, just assume all passing scores are to be preserved.
+                            conn.Execute($"UPDATE {SoloScore.TABLE_NAME} SET preserve = 1 WHERE id = @Id", new { Id = score.ID }, transaction);
+                        }
 
                         transaction.Commit();
                     }
@@ -77,6 +105,11 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor
                     foreach (var p in processors)
                         p.ApplyGlobal(score, conn);
                 }
+
+                elasticQueueProcessor.PushToQueue(new ElasticQueueProcessor.ElasticScoreItem
+                {
+                    ScoreId = (long)item.Score.id,
+                });
             }
             catch (Exception e)
             {
@@ -97,79 +130,49 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor
                 db.Insert(item.ProcessHistory, transaction);
         }
 
-        /// <summary>
-        /// Retrieve user stats for a user based on a score context.
-        /// Creates a new entry if the user does not yet have one.
-        /// </summary>
-        /// <param name="score">The score to use for the user and ruleset lookup.</param>
-        /// <param name="db">The database connection.</param>
-        /// <param name="transaction">The database transaction, if one exists.</param>
-        /// <returns>The retrieved user stats. Null if the ruleset or user was not valid.</returns>
-        public static UserStats? GetUserStats(SoloScore score, MySqlConnection db, MySqlTransaction? transaction = null)
+        private static List<Ruleset> getRulesets()
         {
-            switch (score.ruleset_id)
+            const string ruleset_library_prefix = "osu.Game.Rulesets";
+
+            var rulesetsToProcess = new List<Ruleset>();
+
+            foreach (string file in Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, $"{ruleset_library_prefix}.*.dll"))
             {
-                default:
-                    Console.WriteLine($"Item {score} is for an unsupported ruleset {score.ruleset_id}");
-                    return null;
-
-                case 0:
-                    return getUserStats<UserStatsOsu>(score, db, transaction);
-
-                case 1:
-                    return getUserStats<UserStatsTaiko>(score, db, transaction);
-
-                case 2:
-                    return getUserStats<UserStatsCatch>(score, db, transaction);
-
-                case 3:
-                    return getUserStats<UserStatsMania>(score, db, transaction);
-            }
-        }
-
-        private static T getUserStats<T>(SoloScore score, MySqlConnection db, MySqlTransaction? transaction = null)
-            where T : UserStats, new()
-        {
-            var dbInfo = LegacyDatabaseHelper.GetRulesetSpecifics(score.ruleset_id);
-
-            // for simplicity, let's ensure the row already exists as a separate step.
-            var userStats = db.QuerySingleOrDefault<T>($"SELECT * FROM {dbInfo.UserStatsTable} WHERE user_id = @user_id FOR UPDATE", score, transaction);
-
-            if (userStats == null)
-            {
-                userStats = new T
+                try
                 {
-                    user_id = score.user_id
-                };
-
-                db.Insert(userStats, transaction);
+                    var assembly = Assembly.LoadFrom(file);
+                    Type type = assembly.GetTypes().First(t => t.IsPublic && t.IsSubclassOf(typeof(Ruleset)));
+                    rulesetsToProcess.Add((Ruleset)Activator.CreateInstance(type)!);
+                }
+                catch
+                {
+                    throw new Exception($"Failed to load ruleset ({file})");
+                }
             }
 
-            return userStats;
+            return rulesetsToProcess;
         }
 
-        /// <summary>
-        /// Update stats in database with the correct generic type, because dapper is stupid.
-        /// </summary>
-        private static void updateUserStats(UserStats stats, MySqlConnection db, MySqlTransaction transaction)
+        private class ElasticQueueProcessor : QueueProcessor<ElasticQueueProcessor.ElasticScoreItem>
         {
-            switch (stats)
+            private static readonly string queue_name = $"score-index-{Environment.GetEnvironmentVariable("SCHEMA")}";
+
+            internal ElasticQueueProcessor()
+                : base(new QueueConfiguration { InputQueueName = queue_name })
             {
-                case UserStatsOsu userStatsOsu:
-                    db.Update(userStatsOsu, transaction);
-                    break;
+                // TODO: automate schema version lookup
+                // see https://github.com/ppy/osu-elastic-indexer/blob/316e3e2134933e22363f4911e0be4175984ae15e/osu.ElasticIndexer/Redis.cs#L10
+            }
 
-                case UserStatsTaiko userStatsTaiko:
-                    db.Update(userStatsTaiko, transaction);
-                    break;
+            protected override void ProcessResult(ElasticScoreItem scoreItem)
+            {
+                throw new NotImplementedException();
+            }
 
-                case UserStatsCatch userStatsCatch:
-                    db.Update(userStatsCatch, transaction);
-                    break;
-
-                case UserStatsMania userStatsMania:
-                    db.Update(userStatsMania, transaction);
-                    break;
+            [Serializable]
+            public class ElasticScoreItem : QueueItem
+            {
+                public long? ScoreId { get; init; }
             }
         }
     }

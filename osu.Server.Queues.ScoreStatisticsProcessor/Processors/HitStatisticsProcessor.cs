@@ -3,6 +3,7 @@
 
 using JetBrains.Annotations;
 using MySqlConnector;
+using osu.Game.Online.API.Requests.Responses;
 using osu.Game.Rulesets.Scoring;
 using osu.Server.Queues.ScoreStatisticsProcessor.Models;
 
@@ -14,26 +15,26 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor.Processors
     [UsedImplicitly]
     public class HitStatisticsProcessor : IProcessor
     {
-        public void RevertFromUserStats(SoloScore score, UserStats userStats, int previousVersion, MySqlConnection conn, MySqlTransaction transaction)
+        public void RevertFromUserStats(SoloScoreInfo score, UserStats userStats, int previousVersion, MySqlConnection conn, MySqlTransaction transaction)
         {
             if (previousVersion >= 2)
                 adjustStatisticsFromScore(score, userStats, true);
         }
 
-        public void ApplyToUserStats(SoloScore score, UserStats userStats, MySqlConnection conn, MySqlTransaction transaction)
+        public void ApplyToUserStats(SoloScoreInfo score, UserStats userStats, MySqlConnection conn, MySqlTransaction transaction)
         {
             adjustStatisticsFromScore(score, userStats);
         }
 
-        public void ApplyGlobal(SoloScore score, MySqlConnection conn)
+        public void ApplyGlobal(SoloScoreInfo score, MySqlConnection conn)
         {
         }
 
-        private static void adjustStatisticsFromScore(SoloScore score, UserStats userStats, bool revert = false)
+        private static void adjustStatisticsFromScore(SoloScoreInfo score, UserStats userStats, bool revert = false)
         {
             int multiplier = revert ? -1 : 1;
 
-            foreach (var (result, count) in score.statistics)
+            foreach (var (result, count) in score.Statistics)
             {
                 switch (result)
                 {

@@ -7,13 +7,16 @@ using Dapper;
 using McMaster.Extensions.CommandLineUtils;
 using osu.Server.Queues.ScoreStatisticsProcessor.Models;
 
-namespace osu.Server.Queues.ScorePump
+namespace osu.Server.Queues.ScorePump.Queue
 {
-    [Command("all", Description = "Pumps all completed scores")]
-    public class PumpAllScores : ScorePump
+    [Command("all", Description = "Pumps scores through the queue for reprocessing")]
+    public class PumpAllScores : QueueCommand
     {
         [Option("--start_id")]
         public long StartId { get; set; }
+
+        [Option("--delay", Description = "Delay in milliseconds between queue operations")]
+        public int Delay { get; set; }
 
         [Option("--sql", Description = "Specify a custom query to limit the scope of pumping")]
         public string? CustomQuery { get; set; }
@@ -23,13 +26,13 @@ namespace osu.Server.Queues.ScorePump
             using (var dbMainQuery = Queue.GetDatabaseConnection())
             using (var db = Queue.GetDatabaseConnection())
             {
-                string query = "SELECT * FROM solo_scores WHERE id >= @StartId";
+                string query = $"SELECT * FROM {SoloScore.TABLE_NAME} WHERE id >= @StartId";
 
                 if (!string.IsNullOrEmpty(CustomQuery))
                     query += $" AND {CustomQuery}";
 
                 Console.WriteLine($"Querying with \"{query}\"");
-                var scores = dbMainQuery.Query<SoloScore>(query, this, buffered: false);
+                var scores = dbMainQuery.Query<SoloScore>(query, new { startId = StartId }, buffered: false);
 
                 foreach (var score in scores)
                 {
@@ -37,10 +40,13 @@ namespace osu.Server.Queues.ScorePump
                         break;
 
                     // attach any previous processing information
-                    var history = db.QuerySingleOrDefault<ProcessHistory>("SELECT * FROM solo_scores_process_history WHERE id = @id", score);
+                    var history = db.QuerySingleOrDefault<ProcessHistory>($"SELECT * FROM {ProcessHistory.TABLE_NAME} WHERE score_id = @id", score);
 
                     Console.WriteLine($"Pumping {score}");
                     Queue.PushToQueue(new ScoreItem(score, history));
+
+                    if (Delay > 0)
+                        Thread.Sleep(Delay);
                 }
             }
 

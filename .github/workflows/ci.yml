@@ -1,0 +1,134 @@
+on: [push, pull_request]
+name: Continuous Integration
+
+jobs:
+  inspect-code:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      # FIXME: Tools won't run in .NET 6.0 unless you install 3.1.x LTS side by side.
+      # https://itnext.io/how-to-support-multiple-net-sdks-in-github-actions-workflows-b988daa884e
+      - name: Install .NET 3.1.x LTS
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: "3.1.x"
+
+      - name: Install .NET 6.0.x
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Restore Tools
+        run: dotnet tool restore
+
+      - name: Restore Packages
+        run: dotnet restore
+
+      - name: CodeFileSanity
+        run: |
+          # TODO: Add ignore filters and GitHub Workflow Command Reporting in CFS. That way we don't have to do this workaround.
+          # FIXME: Suppress warnings from templates project
+          exit_code=0
+          while read -r line; do
+            if [[ ! -z "$line" ]]; then
+              echo "::error::$line"
+              exit_code=1
+            fi
+          done <<< $(dotnet codefilesanity)
+          exit $exit_code
+
+      - name: InspectCode
+        run: dotnet jb inspectcode $(pwd)/osu.Server.Queues.ScoreStatisticsProcessor.sln --build --output="inspectcodereport.xml" --caches-home="inspectcode" --verbosity=WARN
+
+      - name: NVika
+        run: dotnet nvika parsereport "${{github.workspace}}/inspectcodereport.xml" --treatwarningsaserrors
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: mysql:8.0
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+          -e MYSQL_ALLOW_EMPTY_PASSWORD=1
+          --entrypoint sh mysql:8.0 -c "exec docker-entrypoint.sh mysqld --default-authentication-plugin=mysql_native_password"
+
+      elasticsearch:
+        env:
+          action.auto_create_index: "false"
+          discovery.type: single-node
+          # Bundled by 6.8.x image and doesn't work when auto_create_index is disabled.
+          # Doesn't seem to exist in 7.x anymore (or they fixed the index creation process).
+          xpack.watcher.enabled: "false"
+        image: elasticsearch:6.8.23
+        ports:
+          - 9200:9200
+
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_USERNAME: root
+      DB_USER: root
+      REDIS_HOST: 127.0.0.1
+
+    steps:
+      - name: Checkout osu-web
+        uses: actions/checkout@v2
+        with:
+          repository: 'ppy/osu-web'
+
+      - name: Setup node.js
+        uses: actions/setup-node@v2
+        with:
+          cache: yarn
+          node-version: '12'
+
+      - name: Set php version
+        uses: shivammathur/setup-php@v2
+        with:
+          extensions: redis
+          tools: composer:v2
+          php-version: 8.0
+
+      - name: Get composer cache directory
+        id: composercache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+
+      - name: Cache composer
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.composercache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - run: mysql -u root -h 127.0.0.1 < ./docker/development/db_setup.sql
+
+      - run: ./build.sh
+
+      # This one's required for now because the processor has a safety guard to make sure it doesn't run on production.
+      # It probably shouldn't exist, but needs more thinking.
+      - run: mysql -u root -h 127.0.0.1 -e 'CREATE TABLE osu.test_database (`id` INT);'
+
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install .NET 6.0.x
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Test
+        run: dotnet test

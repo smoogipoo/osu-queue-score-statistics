@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Dapper;
 using Dapper.Contrib.Extensions;
 using DeepEqual.Syntax;
+using osu.Game.IO.Serialization;
 using osu.Server.Queues.ScoreStatisticsProcessor.Models;
 using Xunit;
 
@@ -20,8 +22,8 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor.Tests
                 // will throw if not on test database.
                 db.Query<int>("SELECT * FROM test_database");
 
-                db.Execute("TRUNCATE TABLE solo_scores");
-                db.Execute("TRUNCATE TABLE solo_scores_process_history");
+                db.Execute($"TRUNCATE TABLE {SoloScore.TABLE_NAME}");
+                db.Execute($"TRUNCATE TABLE {ProcessHistory.TABLE_NAME}");
             }
         }
 
@@ -36,41 +38,39 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor.Tests
 
                 db.Insert(score.ProcessHistory);
 
-                db.QueryFirst<ProcessHistory>("SELECT * FROM solo_scores_process_history").ShouldDeepEqual(score.ProcessHistory);
+                db.QueryFirst<ProcessHistory>($"SELECT * FROM {ProcessHistory.TABLE_NAME}").ShouldDeepEqual(score.ProcessHistory);
             }
         }
 
         [Fact]
-        public void TestMissingHitStatisticsDoesntResultInNullDictionary()
+        public void TestSoloScoreDirectSerialisation()
+        {
+            var score = StatisticsUpdateTests.CreateTestScore().Score;
+
+            var serialised = score.Serialize();
+            var deserialised = serialised.Deserialize<SoloScore>();
+
+            Debug.Assert(deserialised != null);
+
+            // ignore time values for now until we can figure how to test without precision issues.
+            deserialised.created_at = score.created_at;
+            deserialised.updated_at = score.updated_at;
+
+            deserialised.ShouldDeepEqual(score);
+        }
+
+        [Fact]
+        public void TestSoloScoreDatabaseSerialisation()
         {
             using (var db = processor.GetDatabaseConnection())
             {
                 var score = StatisticsUpdateTests.CreateTestScore().Score;
 
-                // intentionally simulating a database null.
-                score.statistics = null!;
-
                 db.Insert(score);
 
-                var retrieved = db.QueryFirst<SoloScore>("SELECT * FROM solo_scores");
-
-                Assert.NotNull(retrieved.statistics);
-            }
-        }
-
-        [Fact]
-        public void TestSoloScoreSerialisation()
-        {
-            using (var db = processor.GetDatabaseConnection())
-            {
-                var score = StatisticsUpdateTests.CreateTestScore().Score;
-
-                db.Insert(score);
-
-                var retrieved = db.QueryFirst<SoloScore>("SELECT * FROM solo_scores");
+                var retrieved = db.QueryFirst<SoloScore>($"SELECT * FROM {SoloScore.TABLE_NAME}");
 
                 // ignore time values for now until we can figure how to test without precision issues.
-                retrieved.started_at = score.started_at;
                 retrieved.created_at = score.created_at;
                 retrieved.updated_at = score.updated_at;
 
