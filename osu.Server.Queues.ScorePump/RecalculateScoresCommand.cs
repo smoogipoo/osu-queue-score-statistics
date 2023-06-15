@@ -125,21 +125,21 @@ namespace osu.Server.Queues.ScorePump
 
         private bool ensureCorrectTotalScore(SoloScore score)
         {
-            Ruleset ruleset = LegacyRulesetHelper.GetRulesetFromLegacyId(score.ruleset_id);
-            ScoreInfo scoreInfo = score.ScoreInfo.ToScoreInfo(score.ScoreInfo.Mods.Select(m => m.ToMod(ruleset)).ToArray());
-            scoreInfo.Ruleset = ruleset.RulesetInfo;
-
-            ScoreProcessor scoreProcessor = ruleset.CreateScoreProcessor();
-            scoreProcessor.Mods.Value = scoreInfo.Mods;
-
-            long totalScore = scoreProcessor.ComputeScore(ScoringMode.Standardised, scoreInfo);
-            double accuracy = scoreProcessor.ComputeAccuracy(scoreInfo);
-
-            if (totalScore == score.ScoreInfo.TotalScore && Math.Round(accuracy, 2) == Math.Round(score.ScoreInfo.Accuracy, 2))
-                return false;
-
-            score.ScoreInfo.TotalScore = totalScore;
-            score.ScoreInfo.Accuracy = accuracy;
+            // Ruleset ruleset = LegacyRulesetHelper.GetRulesetFromLegacyId(score.ruleset_id);
+            // ScoreInfo scoreInfo = score.ScoreInfo.ToScoreInfo(score.ScoreInfo.Mods.Select(m => m.ToMod(ruleset)).ToArray());
+            // scoreInfo.Ruleset = ruleset.RulesetInfo;
+            //
+            // ScoreProcessor scoreProcessor = ruleset.CreateScoreProcessor();
+            // scoreProcessor.Mods.Value = scoreInfo.Mods;
+            //
+            // long totalScore = scoreProcessor.ComputeScore(ScoringMode.Standardised, scoreInfo);
+            // double accuracy = scoreProcessor.ComputeAccuracy(scoreInfo);
+            //
+            // if (totalScore == score.ScoreInfo.TotalScore && Math.Round(accuracy, 2) == Math.Round(score.ScoreInfo.Accuracy, 2))
+            //     return false;
+            //
+            // score.ScoreInfo.TotalScore = totalScore;
+            // score.ScoreInfo.Accuracy = accuracy;
 
             return true;
         }
