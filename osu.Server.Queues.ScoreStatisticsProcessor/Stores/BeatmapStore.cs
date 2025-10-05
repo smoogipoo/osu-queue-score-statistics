@@ -150,7 +150,7 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor.Stores
                 return calculator.Calculate(mods);
             }
 
-            DifficultyAttributeKey key = new DifficultyAttributeKey(beatmap.beatmap_id, (uint)ruleset.RulesetInfo.OnlineID, (uint)getLegacyModsForAttributeLookup(beatmap, ruleset, mods));
+            DifficultyAttributeKey key = new DifficultyAttributeKey(beatmap.beatmap_id, (uint)ruleset.RulesetInfo.OnlineID, (uint)GetLegacyModsForAttributeLookup(beatmap, ruleset, mods));
 
             return (await attribute_memory_cache.GetOrCreateAsync(key, async cacheEntry =>
             {
@@ -190,7 +190,7 @@ namespace osu.Server.Queues.ScoreStatisticsProcessor.Stores
         /// Moreover, the set of <see cref="LegacyMods"/> returned is constrained to mods that actually affect difficulty in the legacy sense.
         /// The entirety of this workaround is not used / unnecessary if <see cref="use_realtime_difficulty_calculation"/> is <see langword="true"/>.
         /// </remarks>
-        private static LegacyMods getLegacyModsForAttributeLookup(Beatmap beatmap, Ruleset ruleset, Mod[] mods)
+        public static LegacyMods GetLegacyModsForAttributeLookup(Beatmap beatmap, Ruleset ruleset, Mod[] mods)
         {
             var legacyMods = ruleset.ConvertToLegacyMods(mods);
 
